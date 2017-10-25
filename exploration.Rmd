@@ -1,0 +1,500 @@
+---
+title: "Exploration"
+author: "Einar Hjörleifsson"
+date: "23/10/2017"
+output: 
+  html_document: 
+    fig_height: 6
+    fig_width: 9
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(viridis)
+library(cowplot)
+theme_set(theme_grey())
+```
+
+## Defining additional functions
+
+```{r}
+# Husky's code (same as R/model.R)
+library(Rcpp)
+source("R/BetaBin.R")
+cppFunction('NumericVector GrowthTransition(NumericMatrix Growthprob,NumericVector Nold) {
+            int Maxgr = Growthprob.ncol(), nlgr = Growthprob.nrow();
+            int le,gr;
+            NumericVector Nnew(nlgr);
+            for(le=0; le < nlgr; le++) Nnew(le) = 0; // Not needed
+            for(le=0; le < nlgr-Maxgr+1; le++) {
+            for(gr = 0;gr < Maxgr ; gr++){
+            Nnew(le+gr) += Nold(le)*Growthprob(le,gr);
+            }
+            }
+            for(le=nlgr-Maxgr+1; le < nlgr ; le++) {
+            for(gr = 0;gr < Maxgr ; gr++){
+            if((le+gr) < nlgr)
+            Nnew(le+gr) += Nold(le)*Growthprob(le,gr);
+            else
+            Nnew(nlgr-1)  += Nold(le)*Growthprob(le,gr); // Maximum growth reached.
+            }
+            }
+            return Nnew;
+            }')
+
+
+
+#' Add stock
+#'
+#' Spreads the number of recruits (rec_n) into different length categories,
+#' given the specified mean length (rec_ml) and the standard deviation (rec_sdl).
+#'
+#' @param lengths A vector containing the length bins
+#' @param rec_ml Mean length of the added stock
+#' @param rec_sdl Standard deviation of the added stock
+#' @param rec_n Number of recruits (stocking density)
+#'
+#' @return A vector of recruits, length of the vector being equal to the 
+#' length of the length bin input vector.
+#' @export
+#' 
+add_recruits <- function(lengths, rec_ml, rec_sdl, rec_n) {
+  
+  #could use if we do not want too large fish
+  maxl <- trunc(rec_ml + 3 * rec_sdl+1) 
+  
+  diff(c(0, pnorm(lengths, rec_ml, rec_sdl))) * rec_n
+
+}
+
+#Natm will only be called once but at every timestep if it is related
+#density
+
+#' Natural mortality
+#' 
+#' Calculates natural mortality accoring to Lorenzen
+#'
+#' @param length 
+#' @param m_ref Mortality at reference length
+#' @param l_ref Reference length
+#' @param rho Power relationship
+#'
+#' @return A vector of mortality by length, length of the vector being equal to the 
+#' length of the length bin input vector.
+#' @export
+#'
+#' @examples
+calc_mmort <- function(length, m_ref, l_ref, rho) {
+  
+  # use l_ref/L instead of L/l_ref to get rid of power-
+  m_ref * (l_ref / length)^(3 * rho)
+  
+}
+
+sim_growth <- function(N, i) { 
+  
+  # i is index to time
+  
+  # Change below, pass only what is really needed into the function
+  
+  # N, Weights Linf,K,dg,dt,maxgr,beta, growthprob are global variables.
+  # growthprob is changed but the global variable is always 0.
+  Biom <- sum(N * Weights) # Per hectar
+  LinfB <- Linf - dg * Biom # Density corrected Linf
+  LinfDensDep[i] <<- LinfB  # Store densdep growth
+  Growth <- K*(LinfB-Lengths)*dt/dl # Growth has to be in the right units dl used in case something else than cm was used.
+  Growth[Growth < 0] <- 0.0001 # Growth can not be 0, lgamma fails
+  for(i in 1:length(Growth)) {
+    alpha <- getalpha(Growth[i],beta,maxgr)
+    growthprob[,i] <<- betabin(0:maxgr,maxgr,alpha,beta)
+  }
+  
+  N1 <- GrowthTransition(t(growthprob),N)
+  return(N1)
+}
+
+calc_sel <- function(lengths, params) {
+  
+  # Params[1] selslope params[2] l50
+  1 / (1 + exp(-params[1] * (lengths - params[2])))
+  
+}
+
+little_helper <- function(x) {
+  x %>% 
+    as.data.frame() %>% 
+    mutate(month = row.names(.) %>% as.numeric()) %>% 
+    gather(length, value,-month, convert = TRUE) %>% 
+    as_tibble()
+}
+
+stimulate <- function(dens = seq(0, 1000, by = 50),
+                      rec_ml = 5,
+                      sel_l50 = 30,
+                      Effort = 7,
+                      details = FALSE) {
+  #dens <- seq(0, 1000, by = 50)
+  #sel_l50 <- seq(25, 40, by = 5)
+  #Effort <- seq(0, 10, by = 0.5)
+  # Here question if the sd should not also be increased
+  #rec_ml <- seq(5, 11, by = 2)
+  N <- Catch <- NatMnumbers <- 
+    matrix(0,length(Time),length(Lengths), dimnames = list(0:(length(Time) - 1), Lengths))
+  tmpCatch <- tmpNatMnumbers <- rep(0,length(Lengths)) # Temp storage for substeps
+  
+  sim <- rec <- list()
+
+  counter <- 0
+  
+  for(s in 1:length(sel_l50)) {
+    if(details) print(paste("Selection:", sel_l50[s]))
+    Selpath <- calc_sel(Lengths, c(sel_slope, sel_l50[s]))
+    for(f in 1:length(Effort)) {
+      if(details) print(paste("Effort:", Effort[f]))
+      for(l in 1:length(rec_ml)) {
+        for(k in 1:length(dens)) {
+          #print(dens[k])
+          counter <- counter + 1
+          N <- Catch <- NatMnumbers <-
+            matrix(0,length(Time),length(Lengths), dimnames = list(1:length(Time), Lengths))
+          
+          
+          for(i  in 1:length(Time)) {
+            #  if(((Time[i]) %% 1) == 0) # Once a year rec
+            #    N[i,] <- N[i,]+add_recruits(Lengths, rec_ml,rec_sdl,rec_n)
+            N[i,] <- N[i,]+add_recruits(Lengths, rec_ml[l],rec_sdl, dens[k] / 12) # Every month
+            for(j in 1:(nsubsteps)) {
+              tmpCatch  <-  N[i,]*(1-exp(-dt/nsubsteps*Effort[f]*Selpath))
+              tmpNatMnumbers <-  N[i,]*(1-exp(-dt/nsubsteps*Natm))
+              N[i,] <- N[i,] - tmpNatMnumbers - tmpCatch
+              Catch[i,] <- Catch[i,] + tmpCatch
+              NatMnumbers[i,] <- NatMnumbers[i,] + tmpNatMnumbers
+            }
+            if(i < length(Time)) N[i+1,] <- sim_growth(N[i,],i)
+            
+            # Latter part of substep  if we use growth in middle of timestep
+            # in that cast nsubsteps would have to be even.
+            #for(j in (nsubsteps/2+1):nsubsteps) {
+            #  tmpCatch  <- N[i,]*(1-exp(-dt/nsubsteps*Effort*Selpath))
+            #  tmpNatMnumbers <-  N[i,]*(1-exp(-dt/nsubsteps*Natm))
+            #  N[i,] <- N[i,] - tmpNatMnumbers - tmpCatch
+            #  Catch[i,] <- Catch[i,] + tmpCatch
+            #  NatMnumbers[i,] <- NatMnumbers[i,] + tmpNatMnumbers
+            #}
+          } # End of time
+          
+          sim[[counter]] <-
+            little_helper(N) %>%
+            rename(n = value) %>%
+            left_join(little_helper(Catch) %>% rename(c = value), by = c("month", "length")) %>%
+            mutate(year = trunc(month/12),
+                   bio = n * a * length^b,
+                   y = c * a * length^b,
+                   hr_n = c/n,
+                   hr_b = y/bio,
+                   dens = dens[k],
+                   f = Effort[f],
+                   sel_l50 = sel_l50[s],
+                   mL = rec_ml[l])
+          rec[[counter]] <-
+            data_frame(rec = add_recruits(Lengths, rec_ml[l],rec_sdl, dens[k] / 12) * 12,
+                       length = Lengths,
+                       dens = dens[k],
+                       f = Effort[f],
+                       sel_l50 = sel_l50[s],
+                       mL = rec_ml[l])
+          
+        }
+      }
+    }
+  }
+  return(list(sim = bind_rows(sim), rec = bind_rows(rec)))
+}
+```
+
+
+```{r}
+Lengths <- seq(2, 75, by = 1) # CM
+dl <- mean(diff(Lengths))
+wtcoeffs <- c(2.5e-5, 3) # Length weight relationship.
+a <- wtcoeffs[1]
+b <- wtcoeffs[2]
+Weights <- wtcoeffs[1]*Lengths^wtcoeffs[2]
+
+dt <- 1 / 12
+Time <- seq(0, 6, by = dt)
+
+nsubsteps <- 10  #addition for very high F and M
+
+# Recruitment
+rec_ml <- 5 # Seed (rec) mean length
+rec_sdl <- 1 # Seed sd, should probably use a cv here
+rec_n <- 600 # 1000 recruits/Ha per year
+
+Linf <- 80 # Base Linf
+LinfDensDep <- rep(0,length(Time)) # to store
+K <- 0.4 # Von bertalanfy's
+# DensDep growth
+dg <- 0.5 #cm ha/kg
+
+
+#NatmPar per year
+m_ref <- 0.6
+l_ref <- 20
+rho <- 0.5 # reduction with size
+
+beta <- 10  # parameter of betabinomial distribution higher values less dispersion
+maxgr <- 3  # Maximum growth per time interval in number of length groups
+
+# Selection of fisheries
+
+sel_l50 <- 30 # L50
+sel_slope <- 3 # Steepness
+Effort <- 5
+
+# Growth update  probabilities.
+growthprob <- matrix(0,(maxgr+1),length(Lengths))
+
+Selpath <- calc_sel(Lengths, c(sel_slope, sel_l50))
+# Do only calculate Natm once as it is not density dependent.
+Natm <- calc_mmort(Lengths, m_ref, l_ref, rho)
+```
+
+## Lorenzen default
+
+```{r}
+res <- stimulate()
+sim <- res$sim
+rec <- res$rec
+stkbio <- 
+  rec %>%
+  mutate(bio = rec * a * length^b) %>% 
+  group_by(dens, f, sel_l50, mL) %>% 
+  summarise(bio_s = sum(bio)) %>% 
+  ungroup()
+```
+
+### By size
+
+```{r}
+d <-
+  sim %>% 
+  filter(dens == 600)
+p1 <-
+  d %>% 
+  filter(length >= sel_l50 - 2,
+         length <= 50,
+         month == 70) %>% 
+  ggplot() +
+  geom_vline(xintercept = sel_l50) +
+  geom_line(aes(length, n),  colour = "red") +
+  geom_line(aes(length, c), colour = "blue") +
+  facet_wrap(~ month) +
+  labs(title = "Stock and catch in numbers")
+p2 <-
+  d %>% 
+  filter(length >= sel_l50 - 2,
+         length <= 50,
+         month == 70) %>% 
+  ggplot() +
+  geom_vline(xintercept = sel_l50 - 2) +
+  geom_line(aes(length, bio),  colour = "red") +
+  geom_line(aes(length, y), colour = "blue") +
+  facet_wrap(~ month) +
+  labs(title = "Biomass and yield")
+p3 <-
+  d %>% 
+  filter(length >= sel_l50 - 2,
+         length <= 50,
+         month == 70) %>% 
+  ggplot() +
+  geom_vline(xintercept = sel_l50 - 2) +
+  geom_line(aes(length, hr_n),  colour = "red") +
+  facet_wrap(~ month) +
+  labs(title = "Harvest rate (numbers)")
+p4 <-
+  d %>% 
+  filter(length >= sel_l50 - 2,
+         length <= 50,
+         month == 70) %>% 
+  ggplot() +
+  geom_vline(xintercept = sel_l50 - 2) +
+  geom_line(aes(length, hr_b),  colour = "red") +
+  facet_wrap(~ month) +
+  labs(title = "Harvest rate (biomass)")
+
+plot_grid(p1, p2, p3, p4)
+```
+
+```{r}
+sim %>%
+  group_by(month, dens) %>% 
+  summarise(n = sum(n),
+            c = sum(c),
+            bio = sum(bio),
+            y = sum(y)) %>% 
+  gather(variable, value, n:y) %>% 
+  ggplot(aes(month, value)) +
+  geom_line(aes(colour = as.factor(dens)), lwd = 1) +
+  facet_wrap(~ variable, scale = "free_y")
+```
+
+### Results
+
+#### Stocking density
+
+```{r}
+eq_tidy <- function(res) {
+  stkbio <- 
+    res$rec %>%
+    mutate(bio = rec * a * length^b) %>% 
+    group_by(dens, f, sel_l50, mL) %>% 
+    summarise(bio_stk = sum(bio)) %>% 
+    ungroup()
+  eq <- 
+    res$sim %>% 
+    filter(year == 5) %>% 
+    group_by(dens, f, sel_l50, mL) %>% 
+    summarise(catch = sum(y)) %>% 
+    left_join(stkbio) %>% 
+    mutate(production = catch - bio_stk) %>% 
+    ungroup()
+  
+  return(eq)
+}
+res <- stimulate(dens = seq(0, 1000, by = 25),
+                 Effort = c(7),
+                 sel_l50 = c(30),
+                 rec_ml = c(5))
+res %>%
+  eq_tidy() %>% 
+  filter(sel_l50 == 30,
+         mL == 5,
+         f == 7) %>% 
+  select(dens, catch, production, bio_stk) %>% 
+  gather(variable, value, -dens) %>% 
+  ggplot(aes(dens, value, colour = variable)) +
+  geom_line(lwd = 1) +
+  scale_colour_brewer(palette = "Set1") +
+  theme(legend.position = c(0.7, 0.5)) +
+  labs(x = "Stocking density (n/ha/year)",
+       y = "Biomass, production (kg/ha/year)",
+       subtitle = "missing recapture %")
+```
+
+
+#### Size at harvesting
+
+```{r}
+res <- stimulate(dens = seq(0, 1000, by = 25),
+                 Effort = c(7),
+                 sel_l50 = c(25, 30, 35, 40),
+                 rec_ml = c(5))
+res %>%
+  eq_tidy() %>% 
+  filter(mL == 5,
+         f == 7,
+         production >= 0) %>% 
+  ggplot(aes(dens, production, colour = as.factor(sel_l50))) +
+  geom_line(lwd = 1) +
+  scale_colour_brewer(palette = "Set1") +
+  theme(legend.position = c(0.85, 0.25)) +
+  labs(x = "Stocking density (n/ha/year)",
+       y = "Production (kg/ha/year)",
+       colour = "Selection")
+```
+
+
+#### Fishing mortality
+
+```{r}
+res <- stimulate(dens = seq(0, 1000, by = 25),
+                 Effort = seq(0, 10, by = 0.25),
+                 sel_l50 = c(30),
+                 rec_ml = c(5))
+d <-
+  res %>%
+  eq_tidy() 
+d2 <- 
+  d %>% 
+  group_by(f) %>% 
+  filter(production == max(production)) %>% 
+  ungroup()
+d3 <- 
+  d %>% 
+  filter(dens > 0) %>% 
+  group_by(dens) %>% 
+  filter(production == max(production, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  # strange brew
+  filter(dens < 400)
+d %>% 
+  ggplot() +
+  geom_raster(aes(f, dens, fill = production)) +
+  geom_contour(aes(f, dens, z = production),
+               breaks = seq(10, 70, by = 5),
+               colour = "white") +
+  scale_fill_viridis(option = "B", direction = -1) +
+  geom_smooth(data = d2, aes(f, dens), se = FALSE, colour = "white") +
+  geom_smooth(data = d3, aes(f, dens), se = FALSE, colour = "white") +
+  annotate("text", x = 5, y = 525, label = "a", colour = "white", angle = 10) +
+  annotate("text", x = 6, y = 340, label = "b", colour = "white", angle = 25) +
+  labs(x = "Fishing mortality (1/y)", y = "Stocking density (n/ha/year)",
+       title = "Production", fill = "kg/ha/yr") +
+  scale_x_continuous(breaks = seq(0, 10, by = 2)) +
+  scale_y_continuous(breaks = seq(0, 1000, by = 200))
+```
+
+
+#### Size of seed fish
+
+```{r}
+res <- 
+  stimulate(dens = seq(0, 1200, by = 25),
+                 Effort = c(10),
+                 sel_l50 = c(30),
+                 rec_ml = seq(3, 11, by = 0.25)) 
+d <-
+  res %>% 
+  eq_tidy()
+d2 <-
+  d %>% 
+  group_by(mL) %>% 
+  filter(production == max(production))
+d %>% 
+  filter(production > 0) %>% 
+  ggplot() +
+  theme_bw() +
+  geom_raster(aes(mL, dens, fill = production)) +
+  geom_contour(aes(mL, dens, z = production),
+               breaks = seq(10, 70, by = 5),
+               colour = "white") +
+  scale_fill_viridis(option = "B", direction = -1) +
+  geom_smooth(data = d2, aes(mL, dens), se = FALSE, colour = "white", lwd = 2) +
+  labs(x = "Length of seed fish (cm)", y = "Stocking density (n/ha/year)",
+       title = "Production", fill = "kg/ha/yr") +
+  scale_x_continuous(breaks = seq(0, 10, by = 2)) +
+  scale_y_continuous(breaks = seq(0, 1000, by = 200))
+```
+
+```{r}
+d3 <-
+  d %>% 
+  group_by(mL) %>% 
+  mutate(pf = production/max(production),
+         dd = (dens - dens[pf == 1])/dens[pf == 1]) %>% 
+  ungroup()
+d3 %>% 
+  filter(mL %in% seq(3, 11, by = 2)) %>% 
+  ggplot(aes(dd, pf, colour = as.factor(mL))) +
+  geom_line() +
+  coord_cartesian(xlim = c(-0.5, 0.5), ylim = c(0.3, 1)) +
+  scale_colour_brewer(palette = "Set1")
+
+```
+
