@@ -1,0 +1,8 @@
+tsi,ts,attributes
+<30,Oligotrophic,"Clear water, oxygen throughout the year"
+30-40,Oligotrophic,"Some shallower lakes/will become anoxic during the summer"
+40-50,Mesotrophic,"Water moderately clear, but probably anoxic during the summer"
+50-60,Eutrophic,"Lower boundary of eutrophy: Decreased transparency"
+60-70,Eutrophic,"Dominance of blue-green algae, algal scum, extensive macrophytes"
+70-80,Eutrophic,"Heavy algal blooms possible, often hyper-eutrophic"
+>80,Eutrophic,"Algal scum, fish kills, few macrophytes"

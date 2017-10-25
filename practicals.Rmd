@@ -1,0 +1,86 @@
+---
+title: "cbf - exercises"
+author: "Einar Hjörleifsson"
+date: "25 October 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+```
+
+
+```{r}
+d1 <- read_excel("CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx",
+                 range = "A2:G47")
+colnames(d1) <- c("id", "sdd", "tp", "chla", "y", "dens", "redundant")
+d1 <-
+  d1 %>% 
+  select(-redundant) %>% 
+  separate(sdd, c("sdd", "ssd_sd"), sep = " ± ", convert = TRUE) %>% 
+  separate(tp,  c("tp", "tp_sd"), sep = " ± ", convert = TRUE) %>% 
+  separate(chla, c("chla", "chla_sd"), sep = " ± ", convert = TRUE)
+```
+
+## Evaluation of trophic state of reservoirs.
+
+Carlon’s Trophic State Index (TSI) can be estimated using total phosphorous (TP), chlorophyll-a content (Chl-a) and Secchi disc depth (SDD).
+
+### Estimate TSI (TP), TSI (Chl-a) and TSI (SDD) for the individual reservoirs using the following equations.
+
+* TSI (TP) = 14.42 ln Total P (mg/m3) + 4.15
+* TSI (Chl-a) = 9.81 ln Chlorophyll a (mg/m3) + 30.6
+* TSI (SDD) = 60 – 14.41 ln SDD (metres)
+
+```{r}
+d1 <-
+  d1 %>% 
+  mutate(tsi_tp = 14.42 * log(tp) + 4.15,
+         tsi_chla = 9.81 * log(chla) + 30.6,
+         tsi_sdd = 60 - 14.41 * log(sdd))
+```
+
+### Estimate average TSI for individual reservoirs as follows:
+
+* Average TSI = [TSI(TP) + TSI(Chl-a) + TSI(SDD)]/3
+
+```{r}
+d1 <- 
+  d1 %>% 
+  mutate(tsi = (tsi_tp + tsi_chla + tsi_sdd) / 3)
+```
+
+### Using the following trophic classification of lakes and reservoirs based on Carlson’s TSI, classify each reservoir.
+
+```{r}
+trophic_classfication <- read_csv("inst/csv/trophic_classification.csv")
+knitr::kable(trophic_classfication)
+```
+
+### Determine the relationship between TSI and CBF yield in **23** reservoirs, using linear regression analysis.
+
+```{r}
+d1 %>% 
+  ggplot(aes(tsi, y)) +
+  geom_point() +
+  geom_smooth() +
+  geom_smooth(method = "lm") +
+  coord_cartesian(ylim =  c(0, 2000))
+```
+
+
+Comment on the Trophic State and CBF potential in non-perennial reservoirs.
+
+# speater
+```{r}
+d2 <- 
+  read_excel("CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx",
+                 range = "A50:F73")
+colnames(d2) <- c("id", "area", "shoreline", "rla", "dl", "y")
+```
+
