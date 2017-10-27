@@ -66,7 +66,7 @@ cppFunction('NumericVector GrowthTransition(NumericMatrix Growthprob,NumericVect
 add_recruits <- function(lengths, rec_ml, rec_sdl, rec_n) {
   
   #could use if we do not want too large fish
-  maxl <- trunc(rec_ml + 3 * rec_sdl+1) 
+  maxl <- trunc(rec_ml + 3 * rec_sdl + 1) 
   
   diff(c(0, pnorm(lengths, rec_ml, rec_sdl))) * rec_n
 
@@ -77,7 +77,7 @@ add_recruits <- function(lengths, rec_ml, rec_sdl, rec_n) {
 
 #' Natural mortality
 #' 
-#' Calculates natural mortality accoring to Lorenzen
+#' Calculates natural mortality by length according to Lorenzen
 #'
 #' @param length 
 #' @param m_ref Mortality at reference length
@@ -102,19 +102,21 @@ sim_growth <- function(N, i) {
   
   # Change below, pass only what is really needed into the function
   
-  # N, Weights Linf,K,dg,dt,maxgr,beta, growthprob are global variables.
+  # Weights Linf , K, dg, dt, maxgr, beta, growthprob are global variables.
   # growthprob is changed but the global variable is always 0.
   Biom <- sum(N * Weights) # Per hectar
   LinfB <- Linf - dg * Biom # Density corrected Linf
   LinfDensDep[i] <<- LinfB  # Store densdep growth
-  Growth <- K*(LinfB-Lengths)*dt/dl # Growth has to be in the right units dl used in case something else than cm was used.
+  # Growth has to be in the right units dl used in case something else than cm was used:
+  Growth <- K * (LinfB - Lengths) * dt / dl 
   Growth[Growth < 0] <- 0.0001 # Growth can not be 0, lgamma fails
   for(i in 1:length(Growth)) {
-    alpha <- getalpha(Growth[i],beta,maxgr)
-    growthprob[,i] <<- betabin(0:maxgr,maxgr,alpha,beta)
+    alpha <- getalpha(Growth[i], beta, maxgr)
+    growthprob[,i] <<- betabin(0:maxgr, maxgr, alpha, beta)
   }
   
-  N1 <- GrowthTransition(t(growthprob),N)
+  # Pass to the C++ function
+  N1 <- GrowthTransition(t(growthprob), N)
   return(N1)
 }
 
@@ -128,8 +130,8 @@ calc_sel <- function(lengths, params) {
 little_helper <- function(x) {
   x %>% 
     as.data.frame() %>% 
-    mutate(month = row.names(.) %>% as.numeric()) %>% 
-    gather(length, value,-month, convert = TRUE) %>% 
+    mutate(time = row.names(.) %>% as.numeric()) %>% 
+    gather(length, value, -time, convert = TRUE) %>% 
     as_tibble()
 }
 
@@ -191,8 +193,8 @@ stimulate <- function(dens = seq(0, 1000, by = 50),
           sim[[counter]] <-
             little_helper(N) %>%
             rename(n = value) %>%
-            left_join(little_helper(Catch) %>% rename(c = value), by = c("month", "length")) %>%
-            mutate(year = trunc(month/12),
+            left_join(little_helper(Catch) %>% rename(c = value), by = c("time", "length")) %>%
+            mutate(year = trunc(time/12),
                    bio = n * a * length^b,
                    y = c * a * length^b,
                    hr_n = c/n,
@@ -219,46 +221,53 @@ stimulate <- function(dens = seq(0, 1000, by = 50),
 
 
 ```{r}
-Lengths <- seq(2, 75, by = 1) # CM
-dl <- mean(diff(Lengths))
-wtcoeffs <- c(2.5e-5, 3) # Length weight relationship.
-a <- wtcoeffs[1]
-b <- wtcoeffs[2]
-Weights <- wtcoeffs[1]*Lengths^wtcoeffs[2]
-
-dt <- 1 / 12
-Time <- seq(0, 6, by = dt)
-
-nsubsteps <- 10  #addition for very high F and M
+# ------------------------------------------------------------------------------
+# Parameters
 
 # Recruitment
 rec_ml <- 5 # Seed (rec) mean length
 rec_sdl <- 1 # Seed sd, should probably use a cv here
-rec_n <- 600 # 1000 recruits/Ha per year
+rec_n   <- 600 # 1000 recruits/Ha per year
 
+# Growth
 Linf <- 80 # Base Linf
-LinfDensDep <- rep(0,length(Time)) # to store
 K <- 0.4 # Von bertalanfy's
 # DensDep growth
 dg <- 0.5 #cm ha/kg
 
+# Length weight relationship (parameter a and b)
+wtcoeffs <- c(2.5e-5, 3)
 
-#NatmPar per year
+# Natural mortality per year
 m_ref <- 0.6
 l_ref <- 20
-rho <- 0.5 # reduction with size
-
-beta <- 10  # parameter of betabinomial distribution higher values less dispersion
-maxgr <- 3  # Maximum growth per time interval in number of length groups
+rho   <- 0.5 # reduction with size
 
 # Selection of fisheries
+sel_l50   <- 30 # L50
+sel_slope <- 3  # Steepness
+Effort    <- 5
 
-sel_l50 <- 30 # L50
-sel_slope <- 3 # Steepness
-Effort <- 5
+# ------------------------------------------------------------------------------
+# Setup
+dl <- 1
+Lengths <- seq(2, 75, by = dl) # CM
+Weights <- wtcoeffs[1] * Lengths^wtcoeffs[2]
+
+dt <- 1 / 12 # timestep (here months)
+Time <- seq(0, 6, by = dt)
+
+a <- wtcoeffs[1]
+b <- wtcoeffs[2]
+
+nsubsteps <- 10  # addition for very high F and M
+LinfDensDep <- rep(0,length(Time)) # to store
+
+beta  <- 10  # parameter of betabinomial distribution higher values less dispersion
+maxgr <- 3   # Maximum growth per time interval in number of length groups
 
 # Growth update  probabilities.
-growthprob <- matrix(0,(maxgr+1),length(Lengths))
+growthprob <- matrix(0, (maxgr + 1), length(Lengths))
 
 Selpath <- calc_sel(Lengths, c(sel_slope, sel_l50))
 # Do only calculate Natm once as it is not density dependent.
@@ -289,43 +298,43 @@ p1 <-
   d %>% 
   filter(length >= sel_l50 - 2,
          length <= 50,
-         month == 70) %>% 
+         time == 70) %>% 
   ggplot() +
   geom_vline(xintercept = sel_l50) +
   geom_line(aes(length, n),  colour = "red") +
   geom_line(aes(length, c), colour = "blue") +
-  facet_wrap(~ month) +
+  facet_wrap(~ time) +
   labs(title = "Stock and catch in numbers")
 p2 <-
   d %>% 
   filter(length >= sel_l50 - 2,
          length <= 50,
-         month == 70) %>% 
+         time == 70) %>% 
   ggplot() +
   geom_vline(xintercept = sel_l50 - 2) +
   geom_line(aes(length, bio),  colour = "red") +
   geom_line(aes(length, y), colour = "blue") +
-  facet_wrap(~ month) +
+  facet_wrap(~ time) +
   labs(title = "Biomass and yield")
 p3 <-
   d %>% 
   filter(length >= sel_l50 - 2,
          length <= 50,
-         month == 70) %>% 
+         time == 70) %>% 
   ggplot() +
   geom_vline(xintercept = sel_l50 - 2) +
   geom_line(aes(length, hr_n),  colour = "red") +
-  facet_wrap(~ month) +
+  facet_wrap(~ time) +
   labs(title = "Harvest rate (numbers)")
 p4 <-
   d %>% 
   filter(length >= sel_l50 - 2,
          length <= 50,
-         month == 70) %>% 
+         time == 70) %>% 
   ggplot() +
   geom_vline(xintercept = sel_l50 - 2) +
   geom_line(aes(length, hr_b),  colour = "red") +
-  facet_wrap(~ month) +
+  facet_wrap(~ time) +
   labs(title = "Harvest rate (biomass)")
 
 plot_grid(p1, p2, p3, p4)
@@ -333,13 +342,13 @@ plot_grid(p1, p2, p3, p4)
 
 ```{r}
 sim %>%
-  group_by(month, dens) %>% 
+  group_by(time, dens) %>% 
   summarise(n = sum(n),
             c = sum(c),
             bio = sum(bio),
             y = sum(y)) %>% 
   gather(variable, value, n:y) %>% 
-  ggplot(aes(month, value)) +
+  ggplot(aes(time, value)) +
   geom_line(aes(colour = as.factor(dens)), lwd = 1) +
   facet_wrap(~ variable, scale = "free_y")
 ```
@@ -496,5 +505,117 @@ d3 %>%
   coord_cartesian(xlim = c(-0.5, 0.5), ylim = c(0.3, 1)) +
   scale_colour_brewer(palette = "Set1")
 
+```
+
+## Single recruitment event
+
+```{r}
+stimulate2 <- function(dens = seq(0, 1000, by = 50),
+                      rec_ml = 5,
+                      sel_l50 = 30,
+                      Effort = 7,
+                      details = FALSE) {
+  #dens <- seq(0, 1000, by = 50)
+  #sel_l50 <- seq(25, 40, by = 5)
+  #Effort <- seq(0, 10, by = 0.5)
+  # Here question if the sd should not also be increased
+  #rec_ml <- seq(5, 11, by = 2)
+  N <- Catch <- NatMnumbers <- 
+    matrix(0,length(Time),length(Lengths), dimnames = list(0:(length(Time) - 1), Lengths))
+  tmpCatch <- tmpNatMnumbers <- rep(0,length(Lengths)) # Temp storage for substeps
+  
+  sim <- rec <- list()
+
+  counter <- 0
+  
+  for(s in 1:length(sel_l50)) {
+    if(details) print(paste("Selection:", sel_l50[s]))
+    Selpath <- calc_sel(Lengths, c(sel_slope, sel_l50[s]))
+    for(f in 1:length(Effort)) {
+      if(details) print(paste("Effort:", Effort[f]))
+      for(l in 1:length(rec_ml)) {
+        for(k in 1:length(dens)) {
+          #print(dens[k])
+          counter <- counter + 1
+          N <- Catch <- NatMnumbers <-
+            matrix(0,length(Time),length(Lengths), dimnames = list(1:length(Time), Lengths))
+          
+          # Single recruit
+          N[1,] <- N[1,] + add_recruits(Lengths, rec_ml[l],rec_sdl, dens[k])
+          for(i  in 1:length(Time)) {
+            #  if(((Time[i]) %% 1) == 0) # Once a year rec
+            #    N[i,] <- N[i,]+add_recruits(Lengths, rec_ml,rec_sdl,rec_n)
+            #N[i,] <- N[i,] + add_recruits(Lengths, rec_ml[l],rec_sdl, dens[k] / 12) #
+            for(j in 1:(nsubsteps)) {
+              tmpCatch  <-  N[i,]*(1-exp(-dt/nsubsteps*Effort[f]*Selpath))
+              tmpNatMnumbers <-  N[i,]*(1-exp(-dt/nsubsteps*Natm))
+              N[i,] <- N[i,] - tmpNatMnumbers - tmpCatch
+              Catch[i,] <- Catch[i,] + tmpCatch
+              NatMnumbers[i,] <- NatMnumbers[i,] + tmpNatMnumbers
+            }
+            if(i < length(Time)) N[i+1,] <- sim_growth(N[i,],i)
+            
+            # Latter part of substep  if we use growth in middle of timestep
+            # in that cast nsubsteps would have to be even.
+            #for(j in (nsubsteps/2+1):nsubsteps) {
+            #  tmpCatch  <- N[i,]*(1-exp(-dt/nsubsteps*Effort*Selpath))
+            #  tmpNatMnumbers <-  N[i,]*(1-exp(-dt/nsubsteps*Natm))
+            #  N[i,] <- N[i,] - tmpNatMnumbers - tmpCatch
+            #  Catch[i,] <- Catch[i,] + tmpCatch
+            #  NatMnumbers[i,] <- NatMnumbers[i,] + tmpNatMnumbers
+            #}
+          } # End of time
+          
+          sim[[counter]] <-
+            little_helper(N) %>%
+            rename(n = value) %>%
+            left_join(little_helper(Catch) %>% rename(c = value), by = c("time", "length")) %>%
+            mutate(year = trunc(time * dt),
+                   bio = n * a * length^b,
+                   y = c * a * length^b,
+                   hr_n = c/n,
+                   hr_b = y/bio,
+                   dens = dens[k],
+                   f = Effort[f],
+                   sel_l50 = sel_l50[s],
+                   mL = rec_ml[l])
+          rec[[counter]] <-
+            data_frame(rec = add_recruits(Lengths, rec_ml[l],rec_sdl, dens[k]),
+                       length = Lengths,
+                       dens = dens[k],
+                       f = Effort[f],
+                       sel_l50 = sel_l50[s],
+                       mL = rec_ml[l])
+          
+        }
+      }
+    }
+  }
+  return(list(sim = bind_rows(sim), rec = bind_rows(rec)))
+}
+```
+
+### Results
+
+```{r}
+res <- stimulate2(Effort = 20)
+sim <- res$sim
+rec <- res$rec
+stkbio <- 
+  rec %>%
+  mutate(bio = rec * a * length^b) %>% 
+  group_by(dens, f, sel_l50, mL) %>% 
+  summarise(bio_s = sum(bio)) %>% 
+  ungroup()
+sim %>%
+  group_by(time, dens) %>% 
+  summarise(n = sum(n),
+            c = sum(c),
+            bio = sum(bio),
+            y = sum(y)) %>% 
+  gather(variable, value, n:y) %>% 
+  ggplot(aes(time, value)) +
+  geom_line(aes(colour = as.factor(dens)), lwd = 1) +
+  facet_wrap(~ variable, scale = "free_y")
 ```
 
