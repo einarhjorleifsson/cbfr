@@ -53,6 +53,26 @@ d1 <-
 d1 <- 
   d1 %>% 
   mutate(tsi = (tsi_tp + tsi_chla + tsi_sdd) / 3)
+
+d1 %>% 
+  ggplot(aes(tsi_tp, tsi_chla)) + geom_point()
+d1 %>% 
+  ggplot(aes(tsi_tp, tsi_sdd)) + geom_point()
+d1 %>% 
+  ggplot(aes(tsi_chla, tsi_sdd)) + geom_point()
+d1 %>% 
+  select(id, y, starts_with("tsi")) %>% 
+  gather(variable, value, -c(id, y)) %>% 
+  ggplot(aes(id, value, colour = variable)) +
+  geom_point() +
+  coord_flip()
+d1 %>% 
+  select(id, y, starts_with("tsi")) %>% 
+  mutate(id = 1:n()) %>% 
+  gather(variable, value, -c(id, y)) %>% 
+  ggplot(aes(id, value, colour = variable)) +
+  geom_point() +
+  geom_line() 
 ```
 
 ### Using the following trophic classification of lakes and reservoirs based on Carlson’s TSI, classify each reservoir.
@@ -76,11 +96,97 @@ d1 %>%
 
 Comment on the Trophic State and CBF potential in non-perennial reservoirs.
 
-# speater
+3. Evaluation of impact of stocking
+
+Exercise 1: Case study from Sri Lanka
+
+* Using the data given in the worksheet, estimate relationship between stocking density (SD) and CBF yield.
+* From the second order regression relationship between SD and CBF yield, estimate optimal stocking density for non-perennial reservoirs of Sri Lanka.
+* Using the data given in the worksheet, determine the relationship between ratio of shoreline length to reservoir area (RLA) and CBF yield.
+* Comment on the importance of determining such empirical relationships for CBF planning.
+
+
+Exercise
 ```{r}
 d2 <- 
   read_excel("CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx",
                  range = "A50:F73")
 colnames(d2) <- c("id", "area", "shoreline", "rla", "dl", "y")
+d2 %>% 
+  ggplot(aes(dl, y)) +
+  geom_point()
+
+d2 %>% 
+  ggplot(aes(rla, y)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+
+* Generally, biological productivity in inland water bodies is inversely proportional to Secchi disc depth (SDD). The yield of stocked fish is therefore expected to be inversely related to SDD. Plot fish yield against Secchi disc depth in 19 oxbow lakes.
+* Smaller inland water bodies are generally more productive than large water bodies. Yield of stocked fish may therefore be inversely related to area of the water body. Plot fish yield against water area of 19 oxbow lakes.
+* Plot stocking density against fish yield. Determine the most appropriate relationship of the two variables.
+* Plot stocking density against average harvest size of stocked fish. Determine the most appropriate relationship between the two variables.
+
+```{r}
+d <- read_excel("CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx",
+                range = "A76:H95")
+colnames(d) <- c("no", "name", "area", "sd", "y", "d", "wgt", "dummy")
+d <-
+  d %>% 
+  select(-dummy)
+
+d %>% ggplot(aes(sd, y)) + geom_point() + geom_smooth(method = "lm")
+d %>% ggplot(aes(area, y)) + geom_point() + geom_smooth(method = "lm")
+d %>% ggplot(aes(d, y)) + geom_point()
+d %>% ggplot(aes(d, wgt)) + geom_point() + geom_smooth(method = "lm")
+```
+
+
+Exercise 3. Case study from Andra Pradesh, India
+
+The following Table gives data of reservoir area, stocking density and fish yield in 40 reservoirs in Andra Pradesh, India.
+
+* Plot fish yield against reservoir area and determine the most appropriate relationship between the two variables.
+* Plot stocking density against reservoir area and determine the most appropriate relationship between the two variables.
+* Plot stocking efficiency against reservoir area and determine the most appropriate relationship between the two variables.
+* Plot stocking density and fish yield in reservoirs and determine the relationship between the two parameters.
+
+```{r}
+d <- read_excel("CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx",
+                range = "A98:F138")
+colnames(d) <- c("no", "name", "area", "d", "y", "e")
+
+d %>% ggplot(aes(area, y)) + geom_point() + geom_smooth()
+d %>% ggplot(aes(area, d)) + geom_point() + geom_smooth()
+d %>% ggplot(aes(area, e)) + geom_point()
+d %>% ggplot(aes(d, y)) + geom_point()
+```
+
+# Combine the data
+
+```{r}
+d$cnt <- "in"
+tmp <- read_excel("CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx",
+                range = "A76:H95")
+colnames(tmp) <- c("no", "name", "area", "sd", "y", "d", "wgt", "dummy")
+tmp$cnt <- "bd"
+d %>% 
+  bind_rows(tmp) %>% 
+  ggplot(aes(d, y, colour = cnt)) + geom_point()
+```
+
+```{r}
+library(broom)
+library(modelr)
+x <- 
+  nls(y ~ a * d + b * d^2,
+      data=tmp, start=list(a = 0, b = 2))
+x %>% 
+  tidy(conf.int = TRUE)
+tmp %>% 
+  add_predictions(x) %>% 
+  ggplot(aes(d, y)) + geom_point() + geom_line(aes(y=pred)) +
+  expand_limits(x = 0, y = 0)
 ```
 
