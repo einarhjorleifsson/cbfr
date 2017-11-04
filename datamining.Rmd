@@ -1,0 +1,289 @@
+---
+title: "datamining some cbf data"
+author: "Einar Hjörleifsson"
+date: "25 October 2017"
+output: 
+  html_document: 
+    fig_caption: yes
+    code_folding: hide
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(viridis)
+library(broom)
+library(modelr)
+```
+
+```{r}
+fil <- "CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx"
+d1 <- read_excel(fil,
+                 range = "A2:G47")
+colnames(d1) <- c("id", "sdd", "tp", "chla", "y", "sd", "redundant")
+d1 <-
+  d1 %>% 
+  select(-redundant) %>% 
+  separate(sdd, c("sdd", "ssd_sd"), sep = " ± ", convert = TRUE) %>% 
+  separate(tp,  c("tp", "tp_sd"), sep = " ± ", convert = TRUE) %>% 
+  separate(chla, c("chla", "chla_sd"), sep = " ± ", convert = TRUE) %>% 
+  mutate(country = "Sri Lanka",
+         id = as.integer(str_sub(id, 2)))
+d2 <- 
+  read_excel(fil,
+             range = "A50:F73")
+colnames(d2) <- c("id", "area", "shoreline", "rla", "dl", "y")
+d2 <-
+  d2 %>% 
+  mutate(id = as.integer(str_sub(id, 2)))
+d1 <-
+  d1 %>% 
+  left_join(d2 %>% select(-y))
+d2$country <- "Sri Lanka"
+d3 <- 
+  read_excel(fil,
+             range = "A76:H95")
+colnames(d3) <- c("id", "name", "area", "ssd", "y", "sd", "wgt", "dummy")
+d3 <- 
+  d3 %>% 
+  select(-dummy) %>% 
+  mutate(country = "Bangladesh")
+d4 <- 
+  read_excel(fil,
+             range = "A98:F138")
+colnames(d4) <- c("id", "name", "area", "sd", "y", "efficiency")
+d4$country <- "India"
+d5a <- 
+  read_csv("inst/csv/vietnam_stocking_density.csv") %>% 
+  gather(year, sd, c(-name, -area), convert = TRUE) %>% 
+  mutate(sd = sd/0.025)
+d5b <- 
+  read_csv("inst/csv/vietnam_yield.csv") %>% 
+  gather(variable, value, -name) %>% 
+  separate(variable, c("variable", "year"), convert = TRUE) %>% 
+  spread(variable, value) %>% 
+  rename(y = yield)
+d5 <-
+  d5a %>% 
+  full_join(d5b) %>% 
+  mutate(country = "Vietnam") %>% 
+  filter(!is.na(sd), !is.na(y))
+
+d <-
+  bind_rows(d1, d3) %>% 
+  bind_rows(d4) %>% 
+  bind_rows(d5)
+```
+
+```{r}
+# Estimating the optimum stocking density
+
+# The model
+country_model <- function(df) {
+  nls(y ~ a * sd + b * sd^2,
+      data = df, start=list(a = 0, b = 2))
+}
+# Estimate
+d2 <-
+  d %>% 
+  group_by(country) %>% 
+  nest() %>% 
+  mutate(model = map(data, country_model)) %>% 
+  mutate(pre = map2(data, model, add_predictions),
+         res = map2(data, model, add_residuals))
+# A trick to get a continuous line on plot
+pre <- 
+  expand.grid(sd = c(seq(0, 12000, by = 50), seq(15000, 44000, by = 1000)),
+              country = unique(d$country),
+              stringsAsFactors = FALSE) %>%
+  as_tibble() %>% 
+  group_by(country) %>% 
+  nest() %>% 
+  left_join(d2 %>% select(country, model)) %>% 
+  mutate(pred = map2(data, model, add_predictions)) %>% 
+  unnest(pred) %>% 
+  filter(pred >= 0)
+# Communication part
+ggplot() +
+  geom_point(data = d, aes(sd, y, colour = country)) +
+  geom_line(data = pre, aes(sd, pred, colour = country)) +
+  labs(x = "Stocking density [seedlings/hectare]",
+       y = "Yield [kg/hectare]",
+       colour = "Country",
+       title = "Yield as a function of stocking density by country") +
+  theme(legend.position = c(0.8, 0.7)) +
+  scale_color_brewer(palette = "Set1")
+```
+
+
+```{r}
+d %>% 
+  ggplot(aes(area, y, colour = country)) +
+  geom_point() +
+  theme(legend.position = c(0.8, 0.7)) +
+  scale_color_brewer(palette = "Set1")
+```
+
+```{r}
+d2 %>% 
+  mutate(glance = map(model, broom::glance)) %>% 
+  unnest(glance, .drop = TRUE) %>% 
+  knitr::kable()
+```
+
+### A. Evaluation of trophic state of reservoirs.
+
+Carlon’s Trophic State Index (TSI) can be estimated using total phosphorous (TP), chlorophyll-a content (Chl-a) and Secchi disc depth (SDD).
+
+1) Estimate TSI (TP), TSI (Chl-a) and TSI (SDD) for the individual reservoirs using the following equations.
+
+* TSI (TP) = 14.42 ln Total P (mg/m3) + 4.15
+* TSI (Chl-a) = 9.81 ln Chlorophyll a (mg/m3) + 30.6
+* TSI (SDD) = 60 – 14.41 ln SDD (metres)
+
+2) Estimate average TSI for individual reservoirs as follows:
+
+* Average TSI = [TSI(TP) + TSI(Chl-a) + TSI(SDD)]/3
+
+```{r}
+d <-
+  d %>% 
+  mutate(tsi_tp = 14.42 * log(tp) + 4.15,
+         tsi_chla = 9.81 * log(chla) + 30.6,
+         tsi_sdd = 60 - 14.41 * log(sdd),
+         tsi = (tsi_tp + tsi_chla + tsi_sdd) / 3)
+```
+
+3) Using the following trophic classification of lakes and reservoirs based on Carlson’s TSI, classify each reservoir.
+
+```{r, eval = FALSE}
+tcl <- read_csv("classificatoin")
+tcl2 <- read_excel("tci.xlsx")
+knitr::kable(tcl)
+x <-  
+  mutate(class = case_when(d1$tsi < 30 ~ "<30"))
+```
+
+4) Determine the relationship between TSI and CBF yield in **23** reservoirs, using linear regression analysis.
+
+Comment on the Trophic State and CBF potential in non-perennial reservoirs.
+
+```{r}
+d %>% 
+  select(tsi_sdd, tsi_tp, tsi_chla,tsi, y) %>% 
+  gather(variable, value, -y) %>% 
+  ggplot(aes(value, y)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~ variable, scale = "free") +
+  labs(x = NULL, y = "Yield")
+```
+
+```{r}
+d %>% 
+  ggplot(aes(area, y)) +
+  geom_point(aes(colour = country)) +
+  #geom_smooth(aes(colour = country), span = 1 ) +
+  labs(x = "Area", y = "Yield") +
+  coord_cartesian(ylim = c(0,1800)) +
+  theme(legend.position = c(0.8, 0.7))
+```
+
+
+
+
+
+```{r}
+d <- 
+  d %>% 
+  mutate(cpus = y/sd)
+d %>% 
+  ggplot(aes(sd, cpus)) +
+  geom_point(aes(colour = country), alpha = 0.4) +
+  expand_limits(x = 0, y = 0)
+
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "Sri Lanka"))
+summary(fit)
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "India"))
+summary(fit)
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "Bangladesh"))
+summary(fit)
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "Vietnam"))
+summary(fit)
+
+
+fit.full <- lm(cpus ~ sd + area + as.factor(country), data = d)
+summary(fit.full)
+drop1(fit.full)
+fit.reduced <- step(fit.full)
+fit.reduced
+
+d1 <-
+  d %>% 
+  filter(country == "Sri Lanka")
+fit <- lm(cpus ~ sd + area + sdd + tp + chla, data = d1)
+summary(fit)
+drop1(fit)
+fit.reduced <- step(fit)
+```
+
+
+
+# Extra
+
+```{r}
+d %>% 
+  ggplot(aes(sd, wgt, colour = country)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+d %>% 
+  filter(country == "Bangladesh") %>% 
+  ggplot(aes(sd, y)) +
+  #geom_point(aes(size = wgt)) +
+  geom_text(aes(label = wgt), angle = 45) +
+  scale_size() +
+  scale_colour_viridis(option = "B", direction = -1) +
+  expand_limits(x = 0, y = 0)
+```
+
+```{r}
+a <- 2.5e-5
+b <- 3
+l2w <- function(l, a = 2.5e-5, b = 3) {
+  a * l^b
+}
+w2l <- function(w, a = 2.5e-5, b = 3) {
+  exp((log(w) - log(a)) / b)
+}
+
+d3 <-
+  d3 %>% 
+  mutate(length = w2l(wgt),
+         n = y/wgt,
+         m = n/sd)
+d3 %>% 
+  ggplot(aes(length)) +
+  geom_histogram()
+d3 %>% 
+  ggplot(aes(sd, m)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+
+```{r}
+d %>% 
+  ggplot(aes(sd, y, colour = country)) +
+  geom_point()
+```
+
+

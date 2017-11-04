@@ -1,0 +1,32 @@
+---
+title: "notes"
+author: "Einar Hjörleifsson"
+date: "30 October 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Assessment of production potential
+
+
+50% of the area used
+
+10 hectare lake
+2000 fingerlings (7 cm)
+
+10 * 2000
+
+16000 survey (approximately)
+
+Snakehead are predators, productivit
+
+```{r}
+16000/20000
+#Exp (Ln 500 * (1.5 * 0.75)) = 4745
+```
+
+
+

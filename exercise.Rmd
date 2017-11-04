@@ -1,0 +1,359 @@
+---
+title: "datamining some cbf data"
+author: "Einar Hjörleifsson"
+date: "25 October 2017"
+output: 
+  html_document: 
+    fig_caption: yes
+    code_folding: show
+    toc_float: true
+---
+
+# Preamble
+
+This exercise is based on some data made available in the course of "Culture-based fisheries in inland waters". The primary aim was to see if some generic patterns could be obvserved from the data from four different countries. The disparate datasets have only few variables in common, them being lake area, stocking density and yield.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(viridis)
+```
+
+
+```{r}
+fil <- "CBF_shared/Session plans/Upali-1-1a-Exercise-worksheet.xlsx"
+d1 <- read_excel(fil,
+                 range = "A2:G47")
+colnames(d1) <- c("id", "sdd", "tp", "chla", "y", "sd", "redundant")
+d1 <-
+  d1 %>% 
+  select(-redundant) %>% 
+  separate(sdd, c("sdd", "ssd_sd"), sep = " ± ", convert = TRUE) %>% 
+  separate(tp,  c("tp", "tp_sd"), sep = " ± ", convert = TRUE) %>% 
+  separate(chla, c("chla", "chla_sd"), sep = " ± ", convert = TRUE) %>% 
+  mutate(country = "Sri Lanka",
+         id = as.integer(str_sub(id, 2)))
+d2 <- 
+  read_excel(fil,
+             range = "A50:F73")
+colnames(d2) <- c("id", "area", "shoreline", "rla", "dl", "y")
+d2 <-
+  d2 %>% 
+  mutate(id = as.integer(str_sub(id, 2)))
+d1 <-
+  d1 %>% 
+  left_join(d2 %>% select(-y))
+d2$country <- "Sri Lanka"
+d3 <- 
+  read_excel(fil,
+             range = "A76:H95")
+colnames(d3) <- c("id", "name", "area", "ssd", "y", "sd", "wgt", "dummy")
+d3 <- 
+  d3 %>% 
+  select(-dummy) %>% 
+  mutate(country = "Bangladesh")
+d4 <- 
+  read_excel(fil,
+             range = "A98:F138")
+colnames(d4) <- c("id", "name", "area", "sd", "y", "efficiency")
+d4$country <- "India"
+d5a <- 
+  read_csv("inst/csv/vietnam_stocking_density.csv") %>% 
+  gather(year, sd, c(-name, -area), convert = TRUE) %>% 
+  mutate(sd = sd/0.005)
+d5b <- 
+  read_csv("inst/csv/vietnam_yield.csv") %>% 
+  gather(variable, value, -name) %>% 
+  separate(variable, c("variable", "year"), convert = TRUE) %>% 
+  spread(variable, value) %>% 
+  rename(y = yield)
+d5 <-
+  d5a %>% 
+  full_join(d5b) %>% 
+  mutate(country = "Vietnam") %>% 
+  filter(!is.na(sd), !is.na(y))
+
+d <-
+  bind_rows(d1, d3) %>% 
+  bind_rows(d4) %>% 
+  bind_rows(d5)
+```
+
+
+```{r}
+d1 <-
+  d1 %>% 
+  mutate(tsi_tp = 14.42 * log(tp) + 4.15,
+         tsi_chla = 9.81 * log(chla) + 30.6,
+         tsi_sdd = 60 - 14.41 * log(sdd),
+         tsi = (tsi_tp + tsi_chla + tsi_sdd) / 3)
+```
+
+3) Using the following trophic classification of lakes and reservoirs based on Carlson’s TSI, classify each reservoir.
+
+```{r, eval = FALSE}
+tcl <- read_csv("classificatoin")
+tcl2 <- read_excel("tci.xlsx")
+knitr::kable(tcl)
+x <-  
+  mutate(class = case_when(d1$tsi < 30 ~ "<30"))
+```
+
+4) Determine the relationship between TSI and CBF yield in **23** reservoirs, using linear regression analysis.
+
+Comment on the Trophic State and CBF potential in non-perennial reservoirs.
+
+```{r}
+d1 %>% 
+  select(tsi_sdd, tsi_tp, tsi_chla,tsi, y) %>% 
+  gather(variable, value, -y) %>% 
+  ggplot(aes(value, y)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~ variable, scale = "free") +
+  labs(x = NULL, y = "Stock density")
+```
+
+```{r}
+d %>% 
+  ggplot(aes(area, y)) +
+  geom_point(aes(colour = country)) +
+  #geom_smooth(aes(colour = country), span = 1 ) +
+  labs(x = "Area", y = "Yield") +
+  coord_cartesian(ylim = c(0,1800)) +
+  theme(legend.position = c(0.8, 0.7))
+```
+
+### B. Evaluation of impact of stocking
+
+Exercise 1: Case study from Sri Lanka
+
+* Using the data given in the worksheet, estimate relationship between stocking density (SD) and CBF yield.
+* From the second order regression relationship between SD and CBF yield, estimate optimal stocking density for non-perennial reservoirs of Sri Lanka.
+* Using the data given in the worksheet, determine the relationship between ratio of shoreline length to reservoir area (RLA) and CBF yield.
+* Comment on the importance of determining such empirical relationships for CBF planning.
+
+
+* Generally, biological productivity in inland water bodies is inversely proportional to Secchi disc depth (SDD). The yield of stocked fish is therefore expected to be inversely related to SDD. Plot fish yield against Secchi disc depth in 19 oxbow lakes.
+* Smaller inland water bodies are generally more productive than large water bodies. Yield of stocked fish may therefore be inversely related to area of the water body. Plot fish yield against water area of 19 oxbow lakes.
+* Plot stocking density against fish yield. Determine the most appropriate relationship of the two variables.
+* Plot stocking density against average harvest size of stocked fish. Determine the most appropriate relationship between the two variables.
+
+Exercise 3. Case study from Andra Pradesh, India
+
+The following Table gives data of reservoir area, stocking density and fish yield in 40 reservoirs in Andra Pradesh, India.
+
+* Plot fish yield against reservoir area and determine the most appropriate relationship between the two variables.
+* Plot stocking density against reservoir area and determine the most appropriate relationship between the two variables.
+* Plot stocking efficiency against reservoir area and determine the most appropriate relationship between the two variables.
+* Plot stocking density and fish yield in reservoirs and determine the relationship between the two parameters.
+
+EMSY = a/(2b)
+MSY = (a/2)2/b
+```{r}
+library(broom)
+library(modelr)
+res <- data.frame(sd = c(c(0:500), seq(1000, 44000, by = 1000))) %>% as_tibble()
+df1 <- d %>% filter(country == "Sri Lanka")
+m1 <- 
+  nls(y ~ a * sd + b * sd^2,
+      data = df1, start=list(a = 0, b = 2))
+m1 %>% 
+  tidy(conf.int = TRUE)
+df1 <-
+  df1 %>% 
+  add_predictions(m1) %>% 
+  add_residuals(m1)
+res <-
+  res %>% 
+  add_predictions(m1) %>% 
+  mutate(country = "Sri Lanka")
+df2 <- d %>% filter(country == "Bangladesh")
+m2 <- 
+  nls(y ~ a * sd + b * sd^2,
+      data = df2, start=list(a = 0, b = 2))
+m2 %>% 
+  tidy(conf.int = TRUE)
+df2 <-
+  df2 %>% 
+  add_predictions(m2) %>% 
+  add_residuals(m2)
+res <-
+  res %>% 
+  add_predictions(m2) %>% 
+  mutate(country = "Bangladesh") %>% 
+  bind_rows(res)
+
+df3 <- d %>% filter(country == "India")
+
+m3 <- 
+  nls(y ~ a * sd + b * sd^2,
+      data = df3, start=list(a = 0, b = 2))
+m3 %>% 
+  tidy(conf.int = TRUE)
+df3 <-
+  df3 %>% 
+  add_predictions(m3) %>% 
+  add_residuals(m3)
+res <-
+  res %>% 
+  add_predictions(m3) %>% 
+  mutate(country = "India") %>% 
+  bind_rows(res)
+
+df4 <- d %>% filter(country == "Vietnam")
+m4 <- 
+  nls(y ~ a * sd + b * sd^2,
+      data = df4, start=list(a = 0, b = 2))
+m4 %>% 
+  tidy(conf.int = TRUE)
+df4 <-
+  df4 %>% 
+  add_predictions(m4) %>% 
+  add_residuals(m4)
+res <-
+  res %>% 
+  add_predictions(m4) %>% 
+  mutate(country = "Vietnam") %>% 
+  bind_rows(res)
+
+res <- 
+  res %>% 
+  rename(y = pred) %>% 
+  filter(y >= 0)
+
+df <-
+  bind_rows(df1, df2) %>% 
+  bind_rows(df3) %>% 
+  bind_rows(df4)
+
+df %>% 
+  #filter(country == "Vietnam") %>% 
+  ggplot(aes(sd, y, colour = country)) + 
+  geom_point() + 
+  geom_line(data = res) +
+  scale_size_area() +
+  expand_limits(x = 0, y = 0) +
+  labs(x = "Stocking density", y = "Yield")
+df %>% 
+  ggplot(aes(sd, y, colour = country)) + 
+  geom_point(aes(size = area), alpha = 0.7) + 
+  geom_line(aes(y=pred)) +
+  scale_size_area() +
+  expand_limits(x = 0, y = 0) +
+  labs(x = "Stocking density", y = "Yield")
+
+df %>% 
+  mutate(residual = y - pred) %>% 
+  ggplot(aes(residual, area)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~ country, scale = "free")
+```
+
+
+```{r}
+d <- d %>% mutate(country = as.factor(country))
+m <- 
+  nls(y ~ a * sd + b * sd^2 + c * area,
+      data = d, start=list(a = 0, b = -2, c = -2))
+m %>% 
+  tidy(conf.int = TRUE)
+```
+
+
+```{r}
+d <- 
+  d %>% 
+  mutate(cpus = y/sd)
+d %>% 
+  filter(country != "India") %>% 
+  ggplot(aes(sd, cpus, size = area)) +
+  geom_point(aes(colour = country), alpha = 0.4) +
+  expand_limits(x = 0, y = 0)
+
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "Sri Lanka"))
+summary(fit)
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "India"))
+summary(fit)
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "Bangladesh"))
+summary(fit)
+fit <- lm(cpus ~ sd + area, data = d %>% filter(country == "Vietnam"))
+summary(fit)
+
+
+fit.full <- lm(cpus ~ sd + area + as.factor(country), data = d)
+summary(fit.full)
+drop1(fit.full)
+fit.reduced <- step(fit.full)
+fit.reduced
+
+d1 <-
+  d %>% 
+  filter(country == "Sri Lanka")
+fit <- lm(cpus ~ sd + area + sdd + tp + chla, data = d1)
+summary(fit)
+drop1(fit)
+fit.reduced <- step(fit)
+```
+
+
+
+# Extra
+
+```{r}
+d %>% 
+  ggplot(aes(sd, wgt, colour = country)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+d %>% 
+  filter(country == "Bangladesh") %>% 
+  ggplot(aes(sd, y)) +
+  #geom_point(aes(size = wgt)) +
+  geom_text(aes(label = wgt), angle = 45) +
+  scale_size() +
+  scale_colour_viridis(option = "B", direction = -1) +
+  expand_limits(x = 0, y = 0)
+```
+
+```{r}
+a <- 2.5e-5
+b <- 3
+l2w <- function(l, a = 2.5e-5, b = 3) {
+  a * l^b
+}
+l2w(30)
+w2l <- function(w, a = 2.5e-5, b = 3) {
+  exp((log(w) - log(a)) / b) 
+}
+
+d3 <-
+  d3 %>% 
+  mutate(length = w2l(wgt),
+         n = y/wgt,
+         m = n/sd)
+d3 %>% 
+  ggplot(aes(length)) +
+  geom_histogram()
+d3 %>% 
+  ggplot(aes(sd, m)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+
+```{r}
+d %>% 
+  ggplot(aes(sd, y, colour = country)) +
+  geom_point()
+```
+
+
